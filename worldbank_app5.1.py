@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[4]:
+# In[5]:
 
 
 import wbgapi as wb
@@ -105,15 +105,31 @@ def make_google_search_link(country, year, indicator_abbr):
 
 # --- Streamlit UI ---
 st.title("EconEasy: World Bank Data for Everyone")
+
+# Step 1: Country Selection
+st.markdown("#### 1️⃣ Select up to 5 countries to compare")
+st.info("Pick up to 5 countries you want to compare. Start typing a country's name to search quickly.")
 all_countries = [c['value'] for c in wb.economy.list() if len(c['id']) == 3]
-selected_countries = st.multiselect("Select up to 5 countries:", all_countries, max_selections=5)
+selected_countries = st.multiselect(
+    "Select up to 5 countries:",
+    all_countries,
+    max_selections=5,
+    help="Pick up to 5 countries to compare. Start typing to search for a country."
+)
 
 if selected_countries:
     country_codes = get_iso3_codes(selected_countries)
 
-    st.markdown("### Choose indicators to compare:")
+    # Step 2: Indicator Selection
+    st.markdown("#### 2️⃣ Choose indicators to compare")
+    st.info("Choose one or more economic indicators to compare (e.g., GDP, Inflation, Population Growth).")
     indicator_keys = list(INDICATORS.keys())
-    selected_inds = st.multiselect("Indicators", indicator_keys, format_func=lambda k: INDICATORS[k][0])
+    selected_inds = st.multiselect(
+        "Indicators",
+        indicator_keys,
+        format_func=lambda k: INDICATORS[k][0],
+        help="Select economic indicators like GDP, Inflation, etc. You can pick multiple indicators."
+    )
 
     if selected_inds:
         indicator_codes = [INDICATORS[k] for k in selected_inds]
@@ -148,20 +164,39 @@ if selected_countries:
                         if code in df.columns:
                             output = output.merge(df[[code]].rename(columns={code: colname}), left_on='YEAR', right_index=True, how='left')
 
-        st.markdown("### 📈 Chart Visualization")
-        plot_cols = st.multiselect("Choose columns to plot:", [col for col in output.columns if col != "YEAR"])
+        # Step 3: Chart Columns Selection
+        st.markdown("#### 3️⃣ Choose which data to visualize")
+        st.info("Pick which country-indicator combinations you want to see on the chart (e.g., GDP for India, Inflation for USA).")
+        plot_cols = st.multiselect(
+            "Choose columns to plot:",
+            [col for col in output.columns if col != "YEAR"],
+            help="Select which country-indicator combinations to display on the chart."
+        )
 
         if plot_cols:
             chart_title = st.text_input("Chart title", "Indicator Comparison Over Time")
 
-            # --- Decade Filter ---
-            enable_decade = st.checkbox("Enable Decade Filter (optional)")
+            # --- Step 4: Decade Filter ---
+            st.markdown("#### 4️⃣ (Optional) Filter by Decade")
+            st.info(
+                "You can focus on a specific decade (like the 1990s or 2000s) to see only the data from that period. "
+                "This helps you compare economic trends within a particular decade."
+            )
+            enable_decade = st.checkbox(
+                "Enable Decade Filter (optional)",
+                help="Check this to filter data by decade (e.g., 1990s, 2000s)."
+            )
             decades = sorted(set([(y // 10) * 10 for y in output['YEAR']]))
             decade_labels = [""] + [f"{d}s" for d in decades]
             output_filtered = output.copy()
 
             if enable_decade:
-                selected_decade_label = st.selectbox("Select Decade (optional)", decade_labels, index=0)
+                selected_decade_label = st.selectbox(
+                    "Select Decade (optional)",
+                    decade_labels,
+                    index=0,
+                    help="Pick a decade to see only data from that period."
+                )
                 if selected_decade_label:
                     selected_decade = int(selected_decade_label[:-1])
                     output_filtered = output[(output['YEAR'] >= selected_decade) & (output['YEAR'] < selected_decade + 10)]
@@ -170,13 +205,26 @@ if selected_countries:
             else:
                 output_filtered = output.copy()
 
-            # --- Year Drill-Down Controls ---
-            drill_down = st.checkbox("🔍 Drill down to a specific year (optional)", key="year_drill")
+            # --- Step 5: Year Drill-Down ---
+            st.markdown("#### 5️⃣ (Optional) Drill Down to a Specific Year")
+            st.info(
+                "Want to focus on a particular year? Enable this option to select a single year and see detailed data for that year. "
+                "This is useful if you want to understand what happened in a specific year."
+            )
+            drill_down = st.checkbox(
+                "🔍 Drill down to a specific year (optional)",
+                key="year_drill",
+                help="Check this to select a specific year for detailed analysis."
+            )
             selected_year = None
             if drill_down:
                 available_years = output_filtered['YEAR'].tolist()
                 if available_years:
-                    selected_year = st.selectbox("Select Year", available_years)
+                    selected_year = st.selectbox(
+                        "Select Year",
+                        available_years,
+                        help="Pick the year you want to focus on."
+                    )
                 else:
                     st.warning("No data available for selected decade/year")
 
@@ -350,6 +398,10 @@ if selected_countries:
             # --- Google Search Links (shown below chart) ---
             if drill_down and selected_year is not None:
                 st.markdown("### 🔗 Google Search: Context for Selected Year")
+                st.info(
+                    "Click the links below to search Google for news, reports, or events that might explain the economic data for your selected country and year. "
+                    "This helps you understand the real-world context behind the numbers."
+                )
                 for col in plot_cols:
                     if col in output_filtered.columns:
                         country = col.split('_')[0]
