@@ -18,6 +18,7 @@ INDICATORS = {
     '10': ('Corruption',      'CC.EST')
 }
 
+# --- Helper Functions ---
 @st.cache_data
 def get_iso3_codes(countries):
     mapping = {
@@ -116,19 +117,6 @@ if not plot_cols:
 
 title = st.text_input("Chart title:", "Economic Indicators Over Time")
 
-# Plot size selection for device adaptability
-plot_size = st.radio(
-    "Choose plot size (for best experience on your device):",
-    options=["Small (mobile)", "Medium", "Large (desktop)"],
-    index=1
-)
-if plot_size == "Small (mobile)":
-    figsize = (5, 3)
-elif plot_size == "Large (desktop)":
-    figsize = (12, 7)
-else:
-    figsize = (8, 5)
-
 # Decade filter
 if st.checkbox("Filter by Decade"):
     decades = sorted({(y//10)*10 for y in df_out['Year']})
@@ -154,7 +142,7 @@ for c in plot_cols:
     else:
         idx_cols.append(c)
 
-fig, ax1 = plt.subplots(figsize=figsize)
+fig, ax1 = plt.subplots(figsize=(10,6))
 ax2 = ax3 = None
 if rate_cols and (abs_cols or idx_cols):
     ax2 = ax1.twinx()
