@@ -123,7 +123,7 @@ def make_google_search_link(country, year, indicator_abbr):
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="EconEasy: World Bank CXO Dashboard", layout="wide")
-st.title("EconEasy: World Bank Data for Executives")
+st.title("EconEasy: Built for the Curious, Not Just the Suits")
 
 # 1️⃣ Country Selection
 st.markdown("#### Select up to 5 countries")
