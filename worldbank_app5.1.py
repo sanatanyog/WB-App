@@ -13,7 +13,7 @@ INDICATORS = {
     '5': ('Inflation, consumer prices (annual %)', 'FP.CPI.TOTL.ZG'),
     '6': ('Population growth (annual %)', 'SP.POP.GROW'),
     '7': ('Central government debt, total (% of GDP)', 'GC.DOD.TOTL.GD.ZS'),
-    '8': ('Poverty Index ', 'POVERTY_AUTO'),
+    '8': ('Poverty Rate (%) ', 'POVERTY_AUTO'),
     '9': ('Unemployment Rate (%)', 'SL.UEM.TOTL.ZS'),
     '10': ('Corruption Control Score (WGI)', 'CC.EST')
 }
