@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[5]:
-
-
 import wbgapi as wb
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -104,7 +98,8 @@ def make_google_search_link(country, year, indicator_abbr):
     return f"https://www.google.com/search?q={urllib.parse.quote(query)}"
 
 # --- Streamlit UI ---
-st.title("EconEasy: World Bank Data for Everyone")
+st.set_page_config(page_title="EconEasy: World Bank CXO Dashboard", layout="wide")
+st.title("EconEasy: World Bank Data for Executives")
 
 # Step 1: Country Selection
 st.markdown("#### 1️⃣ Select up to 5 countries to compare")
@@ -164,12 +159,14 @@ if selected_countries:
                         if code in df.columns:
                             output = output.merge(df[[code]].rename(columns={code: colname}), left_on='YEAR', right_index=True, how='left')
 
-        # Step 3: Chart Columns Selection
+        # Step 3: Chart Columns Selection (AUTO-POPULATED)
         st.markdown("#### 3️⃣ Choose which data to visualize")
-        st.info("Pick which country-indicator combinations you want to see on the chart (e.g., GDP for India, Inflation for USA).")
+        st.info("All relevant country-indicator combinations are automatically selected. You may deselect any if you wish.")
+        available_cols = [col for col in output.columns if col != "YEAR"]
         plot_cols = st.multiselect(
             "Choose columns to plot:",
-            [col for col in output.columns if col != "YEAR"],
+            available_cols,
+            default=available_cols,  # Auto-select all by default
             help="Select which country-indicator combinations to display on the chart."
         )
 
@@ -421,10 +418,3 @@ if selected_countries:
             st.warning("Please select at least one indicator")
 else:
     st.info("Select up to 5 countries to get started")
-
-
-# In[ ]:
-
-
-
-
