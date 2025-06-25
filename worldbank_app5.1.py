@@ -394,7 +394,7 @@ if selected_countries:
 
             # --- Google Search Links (shown below chart) ---
             if drill_down and selected_year is not None:
-                st.markdown("### 🔗 Google Search: Context for Selected Year")
+                st.markdown("Discover Key Events Behind the Data")
                 st.info(
                     "Click the links below to search Google for news, reports, or events that might explain the economic data for your selected country and year. "
                     "This helps you understand the real-world context behind the numbers."
