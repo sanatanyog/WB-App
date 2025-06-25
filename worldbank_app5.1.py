@@ -29,12 +29,13 @@ def get_iso3_codes(countries):
 
 @st.cache_data
 def detect_poverty_index_for_country(code):
-    for name, ind in [
+    options = [
         ('Pov $2.15/day', 'SI.POV.DDAY'),
         ('Pov $4.20/day', 'SI.POV.LMIC'),
         ('Pov national',  'SI.POV.NAHC'),
         ('Gini Index',    'SI.POV.GINI')
-    ]:
+    ]
+    for name, ind in options:
         df = wb.data.DataFrame(ind, [code]).transpose()
         df.index = df.index.map(lambda y: int(str(y).replace('YR','')))
         if not df.dropna(how='all').empty:
@@ -59,44 +60,52 @@ def fetch_wb_data(ind_list, country_codes, country_names):
         else:
             df = fetch_series(code, country_codes)
             if code == 'NY.GDP.MKTP.CD':
-                # keep raw billions for logic, we'll scale in plotting
-                df = df / 1e9
+                df = df / 1e9  # convert to billions
             df = df.rename(columns={cc: nm for cc, nm in zip(country_codes, country_names)})
             for nm in df.columns:
                 data[f"{label} ({nm})"] = df[[nm]]
     return data
 
-def choose_scale_and_unit(data_dict, plot_cols):
-    # find global max across columns
-    max_val = max(data_dict[c].abs().max().max() for c in plot_cols if c in data_dict)
-    # default no scale (1) and percent
+def choose_scale_and_unit(df, cols):
+    # Determine the maximum absolute value among the selected series
+    if not cols:
+        return 1, ''
+    max_val = df[cols].abs().max().max()
+    # Default: no scaling
     factor, unit = 1, ''
-    if any('GDP ' in c or c.startswith('GDP(') for c in plot_cols):
-        if max_val >= 1e3:
-            factor, unit = 1e3, 'Trillion USD' if max_val>=1e3*1e3 else 'Billion USD'
-    if any('Per Capita' in c and 'PPP' in c for c in plot_cols) and max_val>=1e3:
+    # If any GDP series, scale to billions/trillions
+    if any('GDP ' in c or c.startswith('GDP(') for c in cols):
+        if max_val >= 1e12:
+            factor, unit = 1e12, 'Trillion USD'
+        elif max_val >= 1e9:
+            factor, unit = 1e9, 'Billion USD'
+    # If per-capita PPP series present, scale to thousands
+    if any('Per Capita (PPP)' in c for c in cols) and max_val >= 1e3:
         factor, unit = 1e3, 'Thousand'
     return factor, unit
 
 def make_search_link(country, year, indicator):
-    q = f"{country} {year} {indicator} context"
-    return f"https://www.google.com/search?q={urllib.parse.quote(q)}"
+    query = f"{country} {year} {indicator} context"
+    return f"https://www.google.com/search?q={urllib.parse.quote(query)}"
 
 # --- Streamlit App ---
 st.set_page_config(page_title="EconEasy", layout="wide")
 st.title("EconEasy: Any Country, Any Story")
 
-# 1️⃣ Select Countries
-all_countries = [c['value'] for c in wb.economy.list() if len(c['id'])==3]
+# 1️⃣ Country Selection
+all_countries = [c['value'] for c in wb.economy.list() if len(c['id']) == 3]
 selected_countries = st.multiselect("Select up to 5 countries:", all_countries, max_selections=5)
 if not selected_countries:
     st.info("Please select at least one country.")
     st.stop()
 country_codes = get_iso3_codes(selected_countries)
 
-# 2️⃣ Select Indicators
-keys = list(INDICATORS.keys())
-selected_inds = st.multiselect("Select indicators:", keys, format_func=lambda k: INDICATORS[k][0])
+# 2️⃣ Indicator Selection
+ind_keys = list(INDICATORS.keys())
+selected_inds = st.multiselect(
+    "Select indicators:", ind_keys,
+    format_func=lambda k: INDICATORS[k][0]
+)
 if not selected_inds:
     st.warning("Please select at least one indicator.")
     st.stop()
@@ -112,7 +121,7 @@ for name, df in data_dict.items():
                           left_on='Year', right_index=True, how='left')
 
 # 3️⃣ Plot Selection
-available = [c for c in df_out.columns if c!='Year']
+available = [c for c in df_out.columns if c != 'Year']
 plot_cols = st.multiselect("Columns to plot:", available, default=available)
 if not plot_cols:
     st.warning("Select at least one series to plot.")
@@ -120,23 +129,26 @@ if not plot_cols:
 title = st.text_input("Chart title:", "Economic Indicators Over Time")
 
 # Plot size selector
-size_opt = st.radio("Choose plot size:", ["Small (mobile)", "Medium", "Large (desktop)"], index=1)
-figsize = (5,3) if size_opt=="Small (mobile)" else (12,7) if size_opt=="Large (desktop)" else (8,5)
+plot_size = st.radio(
+    "Choose plot size:", ["Small (mobile)", "Medium", "Large (desktop)"],
+    index=1
+)
+figsize = (5,3) if plot_size=="Small (mobile)" else (12,7) if plot_size=="Large (desktop)" else (8,5)
 
 # Decade filter
 if st.checkbox("Filter by Decade"):
-    decs = sorted({(y//10)*10 for y in df_out['Year']})
-    sel = st.selectbox("Decade:", [f"{d}s" for d in decs])
-    d0 = int(sel[:-1])
-    df_plot = df_out[(df_out['Year']>=d0)&(df_out['Year']<d0+10)].copy()
+    decades = sorted({(y // 10) * 10 for y in df_out['Year']})
+    sel_dec = st.selectbox("Decade:", [f"{d}s" for d in decades])
+    d0 = int(sel_dec[:-1])
+    df_plot = df_out[(df_out['Year']>=d0) & (df_out['Year']<d0+10)].copy()
 else:
     df_plot = df_out.copy()
 
 # Drill-down
-sel_year = st.selectbox("Drill down to a year:", df_plot['Year']) if st.checkbox("Drill down to a specific year") else None
+sel_year = st.selectbox("Drill down to a specific year:", df_plot['Year']) if st.checkbox("Drill down to a specific year") else None
 
 # Determine scaling
-scale, y_unit = choose_scale_and_unit(data_dict, plot_cols)
+scale, y_unit = choose_scale_and_unit(df_plot, plot_cols)
 
 # Separate axes
 abs_cols, rate_cols, idx_cols = [], [], []
@@ -154,18 +166,19 @@ ax2 = ax3 = None
 if rate_cols and (abs_cols or idx_cols):
     ax2 = ax1.twinx()
 if idx_cols and (abs_cols or rate_cols):
-    ax3 = ax1.twinx(); ax3.spines['right'].set_position(('outward',60))
+    ax3 = ax1.twinx()
+    ax3.spines['right'].set_position(('outward', 60))
 
-# Helper to plot (with scaling)
 def plot_series(cols, ax, style, marker=None):
     if sel_year:
         row = df_plot[df_plot['Year']==sel_year].iloc[0]
         for col in cols:
             v = row[col]
             if pd.notna(v):
-                val = v/scale
+                val = v / scale
                 lbl = col.split('_(')[0] + (f" ({col.split('_(')[-1][:-1]})" if '_(' in col else '')
                 ax.scatter(sel_year, val, marker=marker, s=100, label=lbl)
+        ax.set_xticks([sel_year])
     else:
         for col in cols:
             series = df_plot[col] / scale
@@ -176,19 +189,23 @@ plot_series(abs_cols, ax1, '-', 'o')
 plot_series(rate_cols, ax2 or ax1, '--', 's')
 plot_series(idx_cols, ax3 or ax2 or ax1, ':', '^')
 
+# Axes labels
 ax1.set_xlabel("Year")
-ax1.set_ylabel(y_unit or "Percent (%)")
+ax1.set_ylabel(y_unit or ("Percent (%)" if rate_cols or idx_cols else "Value"))
 if ax2: ax2.set_ylabel("Percent (%)")
 if ax3: ax3.set_ylabel("Index")
+
 ax1.set_title(title)
 ax1.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
 
-# Legend
+# Legend (with corrected loc)
 handles, labels = [], []
 for ax in [ax1, ax2, ax3]:
     if ax:
-        h,l = ax.get_legend_handles_labels(); handles+=h; labels+=l
-ax1.legend(handles, labels, bbox_to_anchor=(1.02,1), loc='upper left')
+        h, l = ax.get_legend_handles_labels()
+        handles += h; labels += l
+ax1.legend(handles, labels, bbox_to_anchor=(1.02, 1), loc='upper left')
+
 ax1.grid(True, linestyle='--', alpha=0.5)
 plt.tight_layout()
 st.pyplot(fig)
@@ -197,7 +214,7 @@ st.pyplot(fig)
 if sel_year:
     st.markdown("#### Explore Context")
     for col in plot_cols:
-        ind, cc = col.rsplit('_',1)
+        ind, cc = col.rsplit('_', 1)
         url = make_search_link(cc, sel_year, ind)
         st.markdown(f"[{cc} {sel_year} {ind} context]({url})")
 
