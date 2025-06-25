@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
 import urllib.parse
+from matplotlib.ticker import FuncFormatter
 
 # --- Simple Indicator Definitions ---
 INDICATORS = {
@@ -18,6 +19,7 @@ INDICATORS = {
     '10': ('Corruption',      'CC.EST')
 }
 
+# --- Helper Functions ---
 @st.cache_data
 def get_iso3_codes(countries):
     mapping = {
@@ -69,6 +71,18 @@ def make_search_link(country, year, indicator):
     query = f"{country} {year} {indicator} context"
     return f"https://www.google.com/search?q={urllib.parse.quote(query)}"
 
+def choose_scale_and_unit(df, cols):
+    max_val = df[cols].abs().max().max()
+    factor, unit = 1, ''
+    if any('GDP' in c for c in cols) and max_val > 0:
+        if max_val >= 1e12:
+            factor, unit = 1e12, 'Trillion USD'
+        elif max_val >= 1e9:
+            factor, unit = 1e9, 'Billion USD'
+    if any('PPP' in c for c in cols) and max_val >= 1e3:
+        factor, unit = 1e3, 'Thousand'
+    return factor, unit
+
 # --- Streamlit App ---
 st.set_page_config(page_title="EconEasy", layout="wide")
 st.title("EconEasy: Any Country, Any Story")
@@ -79,7 +93,6 @@ selected_countries = st.multiselect("Select up to 5 countries:", all_countries, 
 if not selected_countries:
     st.info("Please select at least one country.")
     st.stop()
-
 country_codes = get_iso3_codes(selected_countries)
 
 # 2️⃣ Indicator Selection
@@ -91,7 +104,6 @@ selected_inds = st.multiselect(
 if not selected_inds:
     st.warning("Please select at least one indicator.")
     st.stop()
-
 ind_list = [INDICATORS[k] for k in selected_inds]
 
 # Fetch data
@@ -116,11 +128,10 @@ if not plot_cols:
 
 title = st.text_input("Chart title:", "Economic Indicators Over Time")
 
-# Plot size selection for device adaptability
+# Plot size selection
 plot_size = st.radio(
-    "Choose plot size (for best experience on your device):",
-    options=["Small (mobile)", "Medium", "Large (desktop)"],
-    index=1
+    "Choose plot size (mobile/desktop):",
+    ["Small (mobile)", "Medium", "Large (desktop)"], index=1
 )
 if plot_size == "Small (mobile)":
     figsize = (5, 3)
@@ -131,18 +142,24 @@ else:
 
 # Decade filter
 if st.checkbox("Filter by Decade"):
-    decades = sorted({(y//10)*10 for y in df_out['Year']})
+    decades = sorted({(y // 10) * 10 for y in df_out['Year']})
     sel_dec = st.selectbox("Decade:", [f"{d}s" for d in decades])
     d0 = int(sel_dec[:-1])
-    df_plot = df_out[(df_out['Year']>=d0)&(df_out['Year']<d0+10)]
+    df_plot = df_out[(df_out['Year'] >= d0) & (df_out['Year'] < d0 + 10)]
 else:
-    df_plot = df_out
+    df_plot = df_out.copy()
 
 # Drill-down
 if st.checkbox("Drill down to a specific year"):
     sel_year = st.selectbox("Year:", df_plot['Year'])
 else:
     sel_year = None
+
+# Determine scaling
+scale, y_unit = choose_scale_and_unit(df_plot, plot_cols)
+df_plot_scaled = df_plot.copy()
+for c in plot_cols:
+    df_plot_scaled[c] = df_plot_scaled[c] / scale
 
 # Separate axes
 abs_cols, rate_cols, idx_cols = [], [], []
@@ -154,36 +171,41 @@ for c in plot_cols:
     else:
         idx_cols.append(c)
 
+# Plotting
 fig, ax1 = plt.subplots(figsize=figsize)
 ax2 = ax3 = None
 if rate_cols and (abs_cols or idx_cols):
     ax2 = ax1.twinx()
 if idx_cols and (abs_cols or rate_cols):
-    ax3 = ax1.twinx()
-    ax3.spines['right'].set_position(('outward', 60))
+    ax3 = ax1.twinx(); ax3.spines['right'].set_position(('outward', 60))
 
 if sel_year is not None:
-    row = df_plot[df_plot['Year']==sel_year].iloc[0]
-    for cols, ax, m in [(abs_cols, ax1, 'o'), (rate_cols, ax2 or ax1, 's'), (idx_cols, ax3 or ax2 or ax1, '^')]:
+    row = df_plot_scaled[df_plot_scaled['Year'] == sel_year].iloc[0]
+    for cols, ax, m in [(abs_cols, ax1, 'o'), (rate_cols, ax2 or ax1, 's'),
+                        (idx_cols, ax3 or ax2 or ax1, '^')]:
         for col in cols:
             v = row[col]
             if pd.notna(v):
                 parts = col.rsplit('_', 1)
-                lbl = f"{parts[0]} ({parts[-1]})" if len(parts)>1 else parts[0]
+                lbl = f"{parts[0]} ({parts[-1]})" if len(parts) > 1 else parts[0]
                 ax.scatter(sel_year, v, s=100, marker=m, label=lbl)
     ax1.set_xticks([sel_year])
 else:
-    for cols, ax, style in [(abs_cols, ax1, '-'), (rate_cols, ax2 or ax1, '--'), (idx_cols, ax3 or ax2 or ax1, ':')]:
+    for cols, ax, style in [(abs_cols, ax1, '-'), (rate_cols, ax2 or ax1, '--'),
+                            (idx_cols, ax3 or ax2 or ax1, ':')]:
         for col in cols:
             parts = col.rsplit('_', 1)
-            lbl = f"{parts[0]} ({parts[-1]})" if len(parts)>1 else parts[0]
-            ax.plot(df_plot['Year'], df_plot[col], style, label=lbl)
+            lbl = f"{parts[0]} ({parts[-1]})" if len(parts) > 1 else parts[0]
+            ax.plot(df_plot_scaled['Year'], df_plot_scaled[col], style, label=lbl)
 
 ax1.set_xlabel("Year")
-ax1.set_ylabel("Level")
+ax1.set_ylabel(y_unit if y_unit else ("Percent (%)" if rate_cols or idx_cols else ""))
 if ax2: ax2.set_ylabel("Rate (%)")
 if ax3: ax3.set_ylabel("Index")
 ax1.set_title(title)
+
+# Format y-axis ticks
+ax1.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
 
 # Legend
 handles, labels = [], []
@@ -191,7 +213,7 @@ for ax in [ax1, ax2, ax3]:
     if ax:
         h, l = ax.get_legend_handles_labels()
         handles += h; labels += l
-ax1.legend(handles, labels, bbox_to_anchor=(1.02,1), loc='upper left')
+ax1.legend(handles, labels, bbox_to_anchor=(1.02, 1), loc='upper left')
 ax1.grid(True, linestyle='--', alpha=0.5)
 plt.tight_layout()
 st.pyplot(fig)
@@ -200,9 +222,8 @@ st.pyplot(fig)
 if sel_year is not None:
     st.markdown("#### Explore Context")
     for col in plot_cols:
-        parts = col.rsplit('_',1)
-        ind = parts[0]
-        cc  = parts[-1]
+        parts = col.rsplit('_', 1)
+        ind = parts[0]; cc = parts[-1]
         url = make_search_link(cc, sel_year, ind)
         st.markdown(f"[{cc} {sel_year} {ind} context]({url})")
 
@@ -210,7 +231,7 @@ if sel_year is not None:
 st.markdown("### Download Data")
 st.download_button(
     "Download CSV",
-    df_plot.to_csv(index=False).encode(),
+    df_plot_scaled.to_csv(index=False).encode(),
     file_name="data.csv",
     mime="text/csv"
 )
