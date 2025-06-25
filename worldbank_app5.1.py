@@ -4,241 +4,192 @@ import matplotlib.pyplot as plt
 import streamlit as st
 import urllib.parse
 
-# --- Indicator Definitions (Human-friendly) ---
+# --- Simple Indicator Definitions ---
 INDICATORS = {
-    '1':  ('Total Economy Size (GDP, US$)',        'NY.GDP.MKTP.CD'),
-    '2':  ('Average Income per Person (US$)',       'NY.GDP.PCAP.CD'),
-    '3':  ('Economy Size Adjusted for Cost (PPP)',  'NY.GDP.MKTP.PP.CD'),
-    '4':  ('Average Income per Person (PPP, $)',    'NY.GDP.PCAP.PP.CD'),
-    '5':  ('Inflation Rate (%)',                    'FP.CPI.TOTL.ZG'),
-    '6':  ('Population Growth Rate (%)',            'SP.POP.GROW'),
-    '7':  ('Government Debt % of GDP',              'GC.DOD.TOTL.GD.ZS'),
-    '8':  ('Poverty Rate (%)',                      'POVERTY_AUTO'),
-    '9':  ('Unemployment Rate (%)',                 'SL.UEM.TOTL.ZS'),
-    '10': ('Corruption Index Score (–2.5 to +2.5)', 'CC.EST')
+    '1':  ('GDP',             'NY.GDP.MKTP.CD'),
+    '2':  ('GDP per Capita',  'NY.GDP.PCAP.CD'),
+    '3':  ('GDP (PPP)',       'NY.GDP.MKTP.PP.CD'),
+    '4':  ('Per Capita (PPP)','NY.GDP.PCAP.PP.CD'),
+    '5':  ('Inflation',       'FP.CPI.TOTL.ZG'),
+    '6':  ('Pop. Growth',     'SP.POP.GROW'),
+    '7':  ('Debt % of GDP',   'GC.DOD.TOTL.GD.ZS'),
+    '8':  ('Poverty %',       'POVERTY_AUTO'),
+    '9':  ('Unemployment %',  'SL.UEM.TOTL.ZS'),
+    '10': ('Corruption',      'CC.EST')
 }
 
-SHORT_NAMES = {
-    'GDP':    'Total Economy Size (GDP, US$)',
-    'GDPpc':  'Average Income per Person (US$)',
-    'GDP_PPP':'Economy Size Adjusted for Cost (PPP)',
-    'GDPpc_PPP':'Average Income per Person (PPP, $)',
-    'Inflation':'Inflation Rate (%)',
-    'PopGrowth':'Population Growth Rate (%)',
-    'Debt':   'Government Debt % of GDP',
-    'Unemployment Rate (%)':'Unemployment Rate (%)',
-    'Corruption Index Score (–2.5 to +2.5)':'Corruption Index Score'
-}
-
-POVERTY_INDICATORS = [
-    ('Poverty at $2.15/day (%)', 'SI.POV.DDAY'),
-    ('Poverty at $4.20/day (%)', 'SI.POV.LMIC'),
-    ('Poverty at national lines (%)','SI.POV.NAHC'),
-    ('Gini Index',                 'SI.POV.GINI')
-]
-
-def get_full_indicator_name(abbr):
-    return SHORT_NAMES.get(abbr, abbr)
+@st.cache_data
+def get_iso3_codes(countries):
+    mapping = {c['value'].lower(): c['id'] 
+               for c in wb.economy.list() if len(c['id']) == 3}
+    return [mapping[name.lower()] for name in countries if name.lower() in mapping]
 
 @st.cache_data
-def get_iso3_codes(user_countries):
-    all_names = {c['value'].lower(): c['id'] for c in wb.economy.list() if len(c['id']) == 3}
-    return [all_names[name.lower()] for name in user_countries if name.lower() in all_names]
-
-@st.cache_data
-def detect_poverty_index_for_country(country_code):
-    for name, code in POVERTY_INDICATORS:
-        df = wb.data.DataFrame(code, [country_code]).transpose()
+def detect_poverty_index_for_country(code):
+    for name, ind in [
+        ('Pov $2.15/day', 'SI.POV.DDAY'),
+        ('Pov $4.20/day', 'SI.POV.LMIC'),
+        ('Pov national',  'SI.POV.NAHC'),
+        ('Gini Index',    'SI.POV.GINI')
+    ]:
+        df = wb.data.DataFrame(ind, [code]).transpose()
         if not df.dropna(how='all').empty:
-            return (name, code)
-    return (None, None)
+            df.index = df.index.map(lambda y: int(str(y).replace('YR','')))
+            return name, df.round(2).dropna(how='all')
+    return None, None
 
 @st.cache_data
-def fetch_indicator_data(code, country_codes):
-    # Fetch and clean any indicator series
+def fetch_series(code, country_codes):
     df = wb.data.DataFrame(code, country_codes).transpose()
-    df.index = df.index.map(lambda y: int(str(y).replace('YR','')) if str(y).startswith('YR') else int(y))
+    df.index = df.index.map(lambda y: int(str(y).replace('YR','')))
     return df.round(2).dropna(how='all')
 
 @st.cache_data
-def fetch_wb_data(indicator_codes, country_codes, country_names):
+def fetch_wb_data(ind_codes, country_codes, country_names):
     data = {}
-    for ind_name, ind_code in indicator_codes:
-        # Poverty auto-detect
-        if ind_code == 'POVERTY_AUTO':
-            for cc in country_codes:
-                if cc == 'IND':
-                    # India-specific MPI
-                    mpi = pd.DataFrame({'IND': [29.17, 14.96]}, index=[2016, 2021])
-                    data["India MPI (NITI Aayog)"] = mpi
-                    for label, code2 in [('Pov $2.15/day', 'SI.POV.DDAY'), ('Pov $4.20/day', 'SI.POV.LMIC')]:
-                        df2 = fetch_indicator_data(code2, [cc])
-                        data[f"{label} (World Bank)"] = df2
-                else:
-                    pname, pcode = detect_poverty_index_for_country(cc)
-                    if pcode:
-                        data[f"{pname} ({cc})"] = fetch_indicator_data(pcode, [cc])
-
-        # Unemployment
-        elif ind_code == 'SL.UEM.TOTL.ZS':
-            df = fetch_indicator_data(ind_code, country_codes)
+    for label, code in ind_codes:
+        if code == 'POVERTY_AUTO':
             for cc, name in zip(country_codes, country_names):
-                if cc in df.columns:
-                    col = df[[cc]].rename(columns={cc: name})
-                    data[f"Unemployment Rate - {name}"] = col
-
-        # Corruption
-        elif ind_code == 'CC.EST':
-            df = fetch_indicator_data(ind_code, country_codes)
-            for cc, name in zip(country_codes, country_names):
-                if cc in df.columns:
-                    col = df[[cc]].rename(columns={cc: name})
-                    data[f"Corruption Score - {name}"] = col
-
-        # Other indicators
+                nm, df = detect_poverty_index_for_country(cc)
+                if df is not None:
+                    data[f"{nm} ({name})"] = df.rename(columns={cc: name})
         else:
-            df = fetch_indicator_data(ind_code, country_codes)
-            if ind_code in ['NY.GDP.MKTP.CD', 'NY.GDP.MKTP.PP.CD']:
-                df = df / 1e9  # scale GDP to billions
-            data[ind_name] = df
-
+            df = fetch_series(code, country_codes)
+            # Scale GDP to billions
+            if code == 'NY.GDP.MKTP.CD':
+                df = df / 1e9
+            # Rename columns with country names
+            df = df.rename(columns={cc: name for cc, name in zip(country_codes, country_names)})
+            for name_col in df.columns:
+                data[f"{label} ({name_col})"] = df[[name_col]]
     return data
 
-def make_google_search_link(country, year, indicator_abbr):
-    full = get_full_indicator_name(indicator_abbr)
-    q = f"{country} {year} {full} economic context"
+def make_search_link(country, year, ind_label):
+    q = f"{country} {year} {ind_label} context"
     return f"https://www.google.com/search?q={urllib.parse.quote(q)}"
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="EconEasy: World Bank CXO Dashboard", layout="wide")
-st.title("EconEasy: Built for the Curious, Not Just the Suits")
+# --- Streamlit App ---
+st.set_page_config(page_title="EconEasy", layout="wide")
+st.title("EconEasy: Any Country, Any Story")
 
-# 1️⃣ Country Selection
-st.markdown("#### Select up to 5 countries")
-all_countries = [c['value'] for c in wb.economy.list() if len(c['id']) == 3]
-selected_countries = st.multiselect("Countries:", all_countries, max_selections=5)
-if not selected_countries:
-    st.info("Please select at least one country to proceed.")
+# 1️⃣ Countries
+countries = [c['value'] for c in wb.economy.list() if len(c['id']) == 3]
+selected = st.multiselect("Select up to 5 countries:", countries, max_selections=5)
+if not selected:
+    st.info("Choose at least one country.")
     st.stop()
-country_codes = get_iso3_codes(selected_countries)
+codes = get_iso3_codes(selected)
 
-# 2️⃣ Indicator Selection
-st.markdown("#### Choose Indicators")
+# 2️⃣ Indicators
 keys = list(INDICATORS.keys())
-selected_inds = st.multiselect("Indicators:", keys, format_func=lambda k: INDICATORS[k][0])
-if not selected_inds:
-    st.warning("Select at least one indicator.")
+chosen = st.multiselect("Select indicators:", keys,
+                        format_func=lambda k: INDICATORS[k][0])
+if not chosen:
+    st.warning("Choose at least one indicator.")
     st.stop()
-indicator_codes = [INDICATORS[k] for k in selected_inds]
+ind_list = [INDICATORS[k] for k in chosen]
 
 # Fetch data
-data_dict = fetch_wb_data(indicator_codes, country_codes, selected_countries)
+data_dict = fetch_wb_data(ind_list, codes, selected)
 
-# Build combined DataFrame
-all_years = sorted({yr for df in data_dict.values() for yr in df.index})
-output = pd.DataFrame({'Year': all_years})
+# Combine into DataFrame
+years = sorted({y for df in data_dict.values() for y in df.index})
+df_out = pd.DataFrame({'Year': years})
 for name, df in data_dict.items():
-    col_key = name.replace(' ', '_').replace('%','').replace('(','').replace(')','').replace('-','_')
-    output = output.merge(df.rename(columns={df.columns[0]: col_key}),
+    key = name.replace(' ', '_').replace('%','').replace('(','').replace(')','')
+    df_out = df_out.merge(df.rename(columns={df.columns[0]: key}),
                           left_on='Year', right_index=True, how='left')
 
-# 3️⃣ Plot Selection
-st.markdown("#### Select Data Series to Plot")
-available_cols = [c for c in output.columns if c != 'Year']
-plot_cols = st.multiselect("Plot Columns:", available_cols, default=available_cols)
-
-if plot_cols:
-    title = st.text_input("Chart Title", "Economic Indicators Over Time")
-
-    # 4️⃣ Decade Filter
-    decades = sorted({(y // 10)*10 for y in output['Year']})
-    if st.checkbox("Filter by Decade"):
-        decade = st.selectbox("Decade:", [f"{d}s" for d in decades])
-        d0 = int(decade[:-1])
-        output = output[(output['Year'] >= d0) & (output['Year'] < d0+10)]
-
-    # 5️⃣ Drill-Down
-    if st.checkbox("🔍 Drill Down to Specific Year"):
-        sel_year = st.selectbox("Year:", output['Year'].tolist())
+# 3️⃣ Plot selection
+cols = [c for c in df_out.columns if c!='Year']
+to_plot = st.multiselect("Columns to plot:", cols, default=cols)
+if to_plot:
+    title = st.text_input("Chart title:", "Economic Indicators Over Time")
+    # Decade filter
+    if st.checkbox("Filter by decade"):
+        decs = sorted({(y//10)*10 for y in df_out['Year']})
+        sel_dec = st.selectbox("Decade:", [f"{d}s" for d in decs])
+        d0 = int(sel_dec[:-1])
+        df_plot = df_out[(df_out['Year']>=d0)&(df_out['Year']<d0+10)]
     else:
-        sel_year = None
+        df_plot = df_out
+
+    # Drill-down
+    drill = st.checkbox("Drill down to year")
+    year_sel = None
+    if drill:
+        year_sel = st.selectbox("Year:", df_plot['Year'])
 
     # Separate axes
-    abs_cols, rate_cols, idx_cols = [], [], []
-    for col in plot_cols:
-        if "GDP" in col:
-            abs_cols.append(col)
-        elif "Inflation" in col or "Unemployment" in col:
-            rate_cols.append(col)
+    abs_c, rate_c, idx_c = [], [], []
+    for c in to_plot:
+        if 'GDP' in c:
+            abs_c.append(c)
+        elif '%' in c:
+            rate_c.append(c)
         else:
-            idx_cols.append(col)
+            idx_c.append(c)
 
-    fig, ax1 = plt.subplots(figsize=(12,7))
+    fig, ax1 = plt.subplots(figsize=(10,6))
     ax2 = ax3 = None
-    if rate_cols and (abs_cols or idx_cols):
+    if rate_c and (abs_c or idx_c):
         ax2 = ax1.twinx()
-    if idx_cols and (abs_cols or rate_cols):
+    if idx_c and (abs_c or rate_c):
         ax3 = ax1.twinx(); ax3.spines['right'].set_position(('outward', 60))
 
-    if sel_year is not None:
-        row = output[output['Year'] == sel_year].iloc[0]
-        for cols, ax, marker in [
-            (abs_cols, ax1, 'o'),
-            (rate_cols, ax2 or ax1, 's'),
-            (idx_cols,  ax3 or ax2 or ax1, '^')
-        ]:
-            for c in cols:
-                v = row[c]
-                if pd.notna(v):
-                    # Build legend label with country code
-                    parts = c.rsplit('_', 1)
-                    label = f"{parts[0]} ({parts[-1]})" if len(parts)>1 else parts[0]
-                    ax.scatter(sel_year, v, marker=marker, s=100, label=label)
-        ax1.set_xticks([sel_year])
+    if drill and year_sel is not None:
+        row = df_plot[df_plot['Year']==year_sel].iloc[0]
+        for cols_list, ax, marker in [(abs_c, ax1, 'o'),
+                                      (rate_c, ax2 or ax1, 's'),
+                                      (idx_c,  ax3 or ax2 or ax1, '^')]:
+            for c in cols_list:
+                val = row[c]
+                if pd.notna(val):
+                    parts = c.rsplit('_',1)
+                    lbl = f"{parts[0]} ({parts[-1]})" if len(parts)>1 else parts[0]
+                    ax.scatter(year_sel, val, marker=marker, s=100, label=lbl)
+        ax1.set_xticks([year_sel])
     else:
-        for cols, ax, style in [
-            (abs_cols, ax1, '-'),
-            (rate_cols, ax2 or ax1, '--'),
-            (idx_cols,  ax3 or ax2 or ax1, ':')
-        ]:
-            for c in cols:
-                parts = c.rsplit('_', 1)
-                label = f"{parts[0]} ({parts[-1]})" if len(parts)>1 else parts[0]
-                ax.plot(output['Year'], output[c], style, label=label)
+        for cols_list, ax, style in [(abs_c, ax1, '-'),
+                                     (rate_c, ax2 or ax1, '--'),
+                                     (idx_c,  ax3 or ax2 or ax1, ':')]:
+            for c in cols_list:
+                parts = c.rsplit('_',1)
+                lbl = f"{parts[0]} ({parts[-1]})" if len(parts)>1 else parts[0]
+                ax.plot(df_plot['Year'], df_plot[c], style, label=lbl)
         ax1.set_xlabel("Year")
 
-    ax1.set_ylabel("Absolute / Level")
+    ax1.set_ylabel("Level")
     if ax2: ax2.set_ylabel("Rate (%)")
-    if ax3: ax3.set_ylabel("Index Score")
+    if ax3: ax3.set_ylabel("Index")
     ax1.set_title(title)
 
     # Legend
-    handles, labels = [], []
+    h, l = [], []
     for ax in [ax1, ax2, ax3]:
         if ax:
-            h, l = ax.get_legend_handles_labels()
-            handles += h; labels += l
-    ax1.legend(handles, labels, bbox_to_anchor=(1.02,1), loc='upper left')
-    ax1.grid(alpha=0.3)
+            hh, ll = ax.get_legend_handles_labels()
+            h += hh; l += ll
+    ax1.legend(h, l, bbox_to_anchor=(1.02,1), loc='upper_left')
+    ax1.grid(True, linestyle='--', alpha=0.5)
     plt.tight_layout()
     st.pyplot(fig)
 
-    # Context links if drilling down
-    if sel_year is not None:
+    # Context links
+    if drill and year_sel is not None:
         st.markdown("#### Explore Context")
-        for c in plot_cols:
-            country = c.split('_')[-1]
-            ind = c.rsplit('_',1)[0]
-            url = make_google_search_link(country, sel_year, ind)
-            st.markdown(f"[{country} {sel_year} {get_full_indicator_name(ind)}]({url})")
+        for c in to_plot:
+            parts = c.rsplit('_',1)
+            ind = parts[0]
+            cc = parts[-1]
+            url = make_search_link(cc, year_sel, ind)
+            st.markdown(f"[{cc} {year_sel} {ind} context]({url})")
 
-    # Download data
-    st.markdown("### Download Data")
-    st.download_button(
-        "Download CSV",
-        data=output.to_csv(index=False).encode(),
-        file_name="worldbank_data.csv",
-        mime="text/csv"
-    )
+    # Download
+    st.markdown("### Download data")
+    st.download_button("Download CSV",
+                       df_plot.to_csv(index=False).encode(),
+                       file_name="data.csv",
+                       mime="text/csv")
 else:
     st.warning("Select at least one series to visualize.")
