@@ -22,12 +22,11 @@ INDICATORS = {
 # --- Helper Functions ---
 @st.cache_data
 def get_iso3_codes(countries):
-    mapping = {
-        c['value'].lower(): c['id']
+    return [
+        c['id']
         for c in wb.economy.list()
-        if len(c['id']) == 3
-    }
-    return [mapping[name.lower()] for name in countries if name.lower() in mapping]
+        if len(c['id']) == 3 and c['value'] in countries
+    ]
 
 @st.cache_data
 def detect_poverty_index_for_country(code):
@@ -54,6 +53,7 @@ def fetch_wb_data(ind_list, country_codes, country_names):
     data = {}
     for label, code in ind_list:
         if code == 'POVERTY_AUTO':
+            # auto-detect poverty series per country
             for cc, name in zip(country_codes, country_names):
                 pname, pdf = detect_poverty_index_for_country(cc)
                 if pdf is not None:
@@ -61,177 +61,145 @@ def fetch_wb_data(ind_list, country_codes, country_names):
         else:
             df = fetch_series(code, country_codes)
             if code == 'NY.GDP.MKTP.CD':
-                df = df / 1e9  # GDP in billions
+                df = df / 1e9  # convert to billions
             df = df.rename(columns={cc: nm for cc, nm in zip(country_codes, country_names)})
             for nm in df.columns:
                 data[f"{label} ({nm})"] = df[[nm]]
     return data
 
-def make_search_link(country, year, indicator):
-    query = f"{country} {year} {indicator} context"
-    return f"https://www.google.com/search?q={urllib.parse.quote(query)}"
-
 def choose_scale_and_unit(df, cols):
     max_val = df[cols].abs().max().max()
+    # default: no scaling for percentages
     factor, unit = 1, ''
+    # Detect GDP series
     if any('GDP' in c for c in cols) and max_val > 0:
         if max_val >= 1e12:
             factor, unit = 1e12, 'Trillion USD'
         elif max_val >= 1e9:
             factor, unit = 1e9, 'Billion USD'
-    if any('PPP' in c for c in cols) and max_val >= 1e3:
+    # Detect PPP per capita
+    if any('PPP' in c and 'Per Capita' in c for c in cols) and max_val >= 1e3:
         factor, unit = 1e3, 'Thousand'
     return factor, unit
+
+def make_search_link(country, year, indicator):
+    q = f"{country} {year} {indicator} context"
+    return f"https://www.google.com/search?q={urllib.parse.quote(q)}"
 
 # --- Streamlit App ---
 st.set_page_config(page_title="EconEasy", layout="wide")
 st.title("EconEasy: Any Country, Any Story")
 
-# 1️⃣ Country Selection
-all_countries = [c['value'] for c in wb.economy.list() if len(c['id']) == 3]
+# 1️⃣ Select Countries
+all_countries = [c['value'] for c in wb.economy.list() if len(c['id'])==3]
 selected_countries = st.multiselect("Select up to 5 countries:", all_countries, max_selections=5)
 if not selected_countries:
     st.info("Please select at least one country.")
     st.stop()
 country_codes = get_iso3_codes(selected_countries)
 
-# 2️⃣ Indicator Selection
-ind_keys = list(INDICATORS.keys())
-selected_inds = st.multiselect(
-    "Select indicators:", ind_keys,
-    format_func=lambda k: INDICATORS[k][0]
-)
+# 2️⃣ Select Indicators
+keys = list(INDICATORS.keys())
+selected_inds = st.multiselect("Select indicators:", keys, format_func=lambda k: INDICATORS[k][0])
 if not selected_inds:
     st.warning("Please select at least one indicator.")
     st.stop()
 ind_list = [INDICATORS[k] for k in selected_inds]
 
-# Fetch data
+# Fetch and merge data
 data_dict = fetch_wb_data(ind_list, country_codes, selected_countries)
-
-# Build DataFrame
 years = sorted({y for df in data_dict.values() for y in df.index})
 df_out = pd.DataFrame({'Year': years})
 for name, df in data_dict.items():
     col = name.replace(' ', '_').replace('%','').replace('(','').replace(')','')
-    df_out = df_out.merge(
-        df.rename(columns={df.columns[0]: col}),
-        left_on='Year', right_index=True, how='left'
-    )
+    df_out = df_out.merge(df.rename(columns={df.columns[0]: col}),
+                          left_on='Year', right_index=True, how='left')
 
-# 3️⃣ Plot Selection
-available_cols = [c for c in df_out.columns if c != 'Year']
-plot_cols = st.multiselect("Columns to plot:", available_cols, default=available_cols)
+# 3️⃣ Plot selection
+available = [c for c in df_out.columns if c!='Year']
+plot_cols = st.multiselect("Columns to plot:", available, default=available)
 if not plot_cols:
     st.warning("Select at least one series to plot.")
     st.stop()
-
 title = st.text_input("Chart title:", "Economic Indicators Over Time")
 
-# Plot size selection
-plot_size = st.radio(
-    "Choose plot size (mobile/desktop):",
-    ["Small (mobile)", "Medium", "Large (desktop)"], index=1
-)
-if plot_size == "Small (mobile)":
-    figsize = (5, 3)
-elif plot_size == "Large (desktop)":
-    figsize = (12, 7)
-else:
-    figsize = (8, 5)
+# Plot size selector
+size_opt = st.radio("Choose plot size:", ["Small (mobile)", "Medium", "Large (desktop)"], index=1)
+figsize = (5,3) if size_opt=="Small (mobile)" else (12,7) if size_opt=="Large (desktop)" else (8,5)
 
 # Decade filter
 if st.checkbox("Filter by Decade"):
-    decades = sorted({(y // 10) * 10 for y in df_out['Year']})
-    sel_dec = st.selectbox("Decade:", [f"{d}s" for d in decades])
-    d0 = int(sel_dec[:-1])
-    df_plot = df_out[(df_out['Year'] >= d0) & (df_out['Year'] < d0 + 10)]
+    decs = sorted({(y//10)*10 for y in df_out['Year']})
+    sel = st.selectbox("Decade:", [f"{d}s" for d in decs])
+    d0 = int(sel[:-1])
+    df_plot = df_out[(df_out['Year']>=d0)&(df_out['Year']<d0+10)].copy()
 else:
     df_plot = df_out.copy()
 
 # Drill-down
-if st.checkbox("Drill down to a specific year"):
-    sel_year = st.selectbox("Year:", df_plot['Year'])
-else:
-    sel_year = None
+sel_year = st.selectbox("Drill down to a specific year:", df_plot['Year']) if st.checkbox("Drill down to a specific year") else None
 
 # Determine scaling
 scale, y_unit = choose_scale_and_unit(df_plot, plot_cols)
 df_plot_scaled = df_plot.copy()
 for c in plot_cols:
-    df_plot_scaled[c] = df_plot_scaled[c] / scale
+    df_plot_scaled[c] /= scale
 
 # Separate axes
 abs_cols, rate_cols, idx_cols = [], [], []
 for c in plot_cols:
-    if 'GDP' in c:
-        abs_cols.append(c)
-    elif '%' in c:
-        rate_cols.append(c)
-    else:
-        idx_cols.append(c)
+    if 'GDP' in c: abs_cols.append(c)
+    elif '%' in c: rate_cols.append(c)
+    else: idx_cols.append(c)
 
-# Plotting
+# Create figure
 fig, ax1 = plt.subplots(figsize=figsize)
 ax2 = ax3 = None
-if rate_cols and (abs_cols or idx_cols):
-    ax2 = ax1.twinx()
+if rate_cols and (abs_cols or idx_cols): ax2 = ax1.twinx()
 if idx_cols and (abs_cols or rate_cols):
-    ax3 = ax1.twinx(); ax3.spines['right'].set_position(('outward', 60))
+    ax3 = ax1.twinx(); ax3.spines['right'].set_position(('outward',60))
 
-if sel_year is not None:
-    row = df_plot_scaled[df_plot_scaled['Year'] == sel_year].iloc[0]
-    for cols, ax, m in [(abs_cols, ax1, 'o'), (rate_cols, ax2 or ax1, 's'),
-                        (idx_cols, ax3 or ax2 or ax1, '^')]:
+# Plot data
+if sel_year:
+    row = df_plot_scaled[df_plot_scaled['Year']==sel_year].iloc[0]
+    for cols, ax, m in [(abs_cols,ax1,'o'),(rate_cols,ax2 or ax1,'s'),(idx_cols,ax3 or ax2 or ax1,'^')]:
         for col in cols:
             v = row[col]
             if pd.notna(v):
-                parts = col.rsplit('_', 1)
-                lbl = f"{parts[0]} ({parts[-1]})" if len(parts) > 1 else parts[0]
-                ax.scatter(sel_year, v, s=100, marker=m, label=lbl)
+                lbl = f"{col.split('_')[0]} ({col.split('_')[-1]})"
+                ax.scatter(sel_year, v, marker=m, s=100, label=lbl)
     ax1.set_xticks([sel_year])
 else:
-    for cols, ax, style in [(abs_cols, ax1, '-'), (rate_cols, ax2 or ax1, '--'),
-                            (idx_cols, ax3 or ax2 or ax1, ':')]:
+    for cols, ax, style in [(abs_cols,ax1,'-'),(rate_cols,ax2 or ax1,'--'),(idx_cols,ax3 or ax2 or ax1,':')]:
         for col in cols:
-            parts = col.rsplit('_', 1)
-            lbl = f"{parts[0]} ({parts[-1]})" if len(parts) > 1 else parts[0]
+            lbl = f"{col.split('_')[0]} ({col.split('_')[-1]})"
             ax.plot(df_plot_scaled['Year'], df_plot_scaled[col], style, label=lbl)
 
+# Labels and formatting
 ax1.set_xlabel("Year")
-ax1.set_ylabel(y_unit if y_unit else ("Percent (%)" if rate_cols or idx_cols else ""))
-if ax2: ax2.set_ylabel("Rate (%)")
+ax1.set_ylabel(y_unit or ("Percent (%)" if rate_cols or idx_cols else "Value"))
+if ax2: ax2.set_ylabel("Percent (%)")
 if ax3: ax3.set_ylabel("Index")
 ax1.set_title(title)
-
-# Format y-axis ticks
 ax1.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:g}"))
-
-# Legend
 handles, labels = [], []
-for ax in [ax1, ax2, ax3]:
+for ax in [ax1,ax2,ax3]:
     if ax:
-        h, l = ax.get_legend_handles_labels()
-        handles += h; labels += l
-ax1.legend(handles, labels, bbox_to_anchor=(1.02, 1), loc='upper left')
-ax1.grid(True, linestyle='--', alpha=0.5)
+        h,l = ax.get_legend_handles_labels(); handles+=h; labels+=l
+ax1.legend(handles,labels,bbox_to_anchor=(1.02,1),loc='upper left')
+ax1.grid(True,linestyle='--',alpha=0.5)
 plt.tight_layout()
 st.pyplot(fig)
 
 # Context links
-if sel_year is not None:
+if sel_year:
     st.markdown("#### Explore Context")
     for col in plot_cols:
-        parts = col.rsplit('_', 1)
-        ind = parts[0]; cc = parts[-1]
+        ind, cc = col.rsplit('_',1)
         url = make_search_link(cc, sel_year, ind)
         st.markdown(f"[{cc} {sel_year} {ind} context]({url})")
 
-# Download
+# Download CSV
 st.markdown("### Download Data")
-st.download_button(
-    "Download CSV",
-    df_plot_scaled.to_csv(index=False).encode(),
-    file_name="data.csv",
-    mime="text/csv"
-)
+st.download_button("Download CSV", df_plot_scaled.to_csv(index=False).encode(),
+                   file_name="data.csv", mime="text/csv")
