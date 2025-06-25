@@ -85,4 +85,120 @@ country_codes = get_iso3_codes(selected_countries)
 
 # 2️⃣ Indicator Selection
 ind_keys = list(INDICATORS.keys())
-selected
+selected_inds = st.multiselect(
+    "Select indicators:", ind_keys,
+    format_func=lambda k: INDICATORS[k][0]
+)
+if not selected_inds:
+    st.warning("Please select at least one indicator.")
+    st.stop()
+
+ind_list = [INDICATORS[k] for k in selected_inds]
+
+# Fetch data
+data_dict = fetch_wb_data(ind_list, country_codes, selected_countries)
+
+# Build DataFrame
+years = sorted({y for df in data_dict.values() for y in df.index})
+df_out = pd.DataFrame({'Year': years})
+for name, df in data_dict.items():
+    col = name.replace(' ', '_').replace('%','').replace('(','').replace(')','')
+    df_out = df_out.merge(
+        df.rename(columns={df.columns[0]: col}),
+        left_on='Year', right_index=True, how='left'
+    )
+
+# 3️⃣ Plot Selection
+available_cols = [c for c in df_out.columns if c != 'Year']
+plot_cols = st.multiselect("Columns to plot:", available_cols, default=available_cols)
+if not plot_cols:
+    st.warning("Select at least one series to plot.")
+    st.stop()
+
+title = st.text_input("Chart title:", "Economic Indicators Over Time")
+
+# Decade filter
+if st.checkbox("Filter by Decade"):
+    decades = sorted({(y//10)*10 for y in df_out['Year']})
+    sel_dec = st.selectbox("Decade:", [f"{d}s" for d in decades])
+    d0 = int(sel_dec[:-1])
+    df_plot = df_out[(df_out['Year']>=d0)&(df_out['Year']<d0+10)]
+else:
+    df_plot = df_out
+
+# Drill-down
+if st.checkbox("Drill down to a specific year"):
+    sel_year = st.selectbox("Year:", df_plot['Year'])
+else:
+    sel_year = None
+
+# Separate axes
+abs_cols, rate_cols, idx_cols = [], [], []
+for c in plot_cols:
+    if 'GDP' in c:
+        abs_cols.append(c)
+    elif '%' in c:
+        rate_cols.append(c)
+    else:
+        idx_cols.append(c)
+
+fig, ax1 = plt.subplots(figsize=(10,6))
+ax2 = ax3 = None
+if rate_cols and (abs_cols or idx_cols):
+    ax2 = ax1.twinx()
+if idx_cols and (abs_cols or rate_cols):
+    ax3 = ax1.twinx()
+    ax3.spines['right'].set_position(('outward', 60))
+
+if sel_year is not None:
+    row = df_plot[df_plot['Year']==sel_year].iloc[0]
+    for cols, ax, m in [(abs_cols, ax1, 'o'), (rate_cols, ax2 or ax1, 's'), (idx_cols, ax3 or ax2 or ax1, '^')]:
+        for col in cols:
+            v = row[col]
+            if pd.notna(v):
+                parts = col.rsplit('_', 1)
+                lbl = f"{parts[0]} ({parts[-1]})" if len(parts)>1 else parts[0]
+                ax.scatter(sel_year, v, s=100, marker=m, label=lbl)
+    ax1.set_xticks([sel_year])
+else:
+    for cols, ax, style in [(abs_cols, ax1, '-'), (rate_cols, ax2 or ax1, '--'), (idx_cols, ax3 or ax2 or ax1, ':')]:
+        for col in cols:
+            parts = col.rsplit('_', 1)
+            lbl = f"{parts[0]} ({parts[-1]})" if len(parts)>1 else parts[0]
+            ax.plot(df_plot['Year'], df_plot[col], style, label=lbl)
+
+ax1.set_xlabel("Year")
+ax1.set_ylabel("Level")
+if ax2: ax2.set_ylabel("Rate (%)")
+if ax3: ax3.set_ylabel("Index")
+ax1.set_title(title)
+
+# Legend
+handles, labels = [], []
+for ax in [ax1, ax2, ax3]:
+    if ax:
+        h, l = ax.get_legend_handles_labels()
+        handles += h; labels += l
+ax1.legend(handles, labels, bbox_to_anchor=(1.02,1), loc='upper left')
+ax1.grid(True, linestyle='--', alpha=0.5)
+plt.tight_layout()
+st.pyplot(fig)
+
+# Context links
+if sel_year is not None:
+    st.markdown("#### Explore Context")
+    for col in plot_cols:
+        parts = col.rsplit('_',1)
+        ind = parts[0]
+        cc  = parts[-1]
+        url = make_search_link(cc, sel_year, ind)
+        st.markdown(f"[{cc} {sel_year} {ind} context]({url})")
+
+# Download
+st.markdown("### Download Data")
+st.download_button(
+    "Download CSV",
+    df_plot.to_csv(index=False).encode(),
+    file_name="data.csv",
+    mime="text/csv"
+)
